@@ -1,7 +1,18 @@
-model.py # Transformer architecture
-train.py # Training loop
-generate.py # Text generation script
-input.txt # Dataset (Tiny Shakespeare)
+-- model.py # Transformer architecture
+-- train.py # Training loop
+-- generate.py # Text generation script
+-- input.txt # Dataset (Tiny Shakespeare)
+
+
+## Features
+
+- Custom implementation of:
+  - Masked Self-Attention
+  - Multi-Head Attention
+  - Feed Forward Networks
+  - Layer Normalization
+- GPT-2 style architecture
+- Subword tokenization using GPT-2 tokenizer
 
 
 
