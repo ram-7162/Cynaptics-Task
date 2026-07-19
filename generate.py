@@ -1,6 +1,6 @@
 import torch
-from model import GPTLanguageModel
 from transformers import GPT2TokenizerFast
+from model import GPTLanguageModel, block_size, d_model, vocab_size, num_block, num_heads, d_ffn, dropout
 
 
 
@@ -37,10 +37,10 @@ decode = lambda l: tokenizer.decode(l)
 
 vocab_size = tokenizer.vocab_size
 
-checkpoint = torch.load("model.pt", map_location=device)
+checkpoint = torch.load("best_model.pt", map_location=device)
 
-model = GPTLanguageModel(vocab_size).to(device)
-model.load_state_dict(checkpoint["model_state_dict"])
+model = GPTLanguageModel(d_model, vocab_size, num_block, num_heads, d_ffn, dropout).to(device)
+model.load_state_dict(checkpoint)
 
 init_word = input("Enter the starting few words : ")
 
