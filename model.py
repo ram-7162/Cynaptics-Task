@@ -4,6 +4,62 @@ from torch.nn import functional as F
 
 
 
+
+class InputEmbedding(nn.Module):
+    def __init__(self, d_model, vocab_size):
+        super().__init__()
+        self.d_model = d_model
+        self.vocab_size = vocab_size
+        self.Embedding = nn.Embedding(vocab_size, d_model)
+    def forward(self, x):
+        return self.Embedding(x) * math.sqrt(self.d_model)
+
+class PositionalEmbedding(nn.Module):
+    def __init__(self, d_model, max_seq_length):
+        super().__init__()
+        self.d_model = d_model
+        self.max_seq_length = max_seq_length
+        pe = torch.zeros(max_seq_length, d_model)
+        position = torch.arange(0, max_seq_length).unsqueeze(1)
+        div = 1 / (10000 ** (torch.arange(0, d_model, 2)/d_model))
+        pe[:, 0::2] = torch.sin(position * div)
+        pe[:, 1::2] = torch.cos(position * div)
+        pe = pe.unsqueeze(0)  ##(1, max_se_length, d_model)
+        self.register_buffer("pe", pe) ### it create pe as attribute as well make it untrainable
+
+    def forward(self, x):
+        return x + self.pe[:, :x.size(1)]
+
+
+
+class LayerNormalization(nn.Module):
+    def __init__(self,d_model : int, eps : float = 1e-6):
+        super().__init__()
+        self.eps = eps
+        self.beta = nn.Parameter(torch.zeros(d_model))
+        self.gamma = nn.Parameter(torch.ones(d_model))
+
+    def forward(self, x):
+        mean = x.mean(dim = -1, keepdim = True)
+        var = x.var(dim=-1, unbiased=False, keepdim = True)
+        x = (x - mean)/(torch.sqrt(var + self.eps))
+        return self.gamma*x + self.beta
+
+
+class FeedForwardBlock(nn.Module):
+    def __init__(self, d_model, d_ffn, dropout: float):
+        super().__init__()
+        self.features = nn.Sequential(
+            nn.Linear(d_model, d_ffn),
+            nn.ReLU(),  # or nn.GELU()
+            nn.Dropout(p=dropout),
+            nn.Linear(d_ffn, d_model)
+        )
+    def forward(self, x):
+        return self.features(x)
+
+
+
 class SelfAttention(nn.Module):
     def __init__(self, d_model, dropout):
         super().__init__()
