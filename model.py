@@ -1,9 +1,11 @@
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+import math
 
 
 
+block_size = 20
 
 class InputEmbedding(nn.Module):
     def __init__(self, d_model, vocab_size):
