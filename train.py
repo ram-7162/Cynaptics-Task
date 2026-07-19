@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import numpy as np
-from task1.model import GPTLanguageModel, block_size
+from model import GPTLanguageModel
 from transformers import GPT2TokenizerFast
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
@@ -31,6 +31,10 @@ decode = lambda l: tokenizer.decode(l)
 vocab_size = tokenizer.vocab_size
 
 data = torch.tensor(encode(text), dtype=torch.long)
+
+n = int(0.9 * len(data))
+train_data = data[:n]
+val_data = data[n:]
 
 print("Total tokens:", len(data))
 
