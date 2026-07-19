@@ -26,7 +26,7 @@ Updated Approach:
 
 
 ### Data Scaling
-  text = text * 5
+  text = text 
 
 
 ## Training Results
