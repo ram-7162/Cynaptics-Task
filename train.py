@@ -1,20 +1,29 @@
 import torch
+import numpy as np
 from task1.model import GPTLanguageModel, block_size
 from transformers import GPT2TokenizerFast
 
 
-batch_size = 16
-max_iters = 8000
-eval_interval = 100
-learning_rate = 1e-4
-eval_iters = 50
 
+d_model = 384
+num_block = 6
+num_heads = 6
+d_ffn = 4 * d_model
+dropout = 0.1
+learning_rate = 3e-4
+epochs = 5
 device = "cuda" if torch.cuda.is_available() else "cpu"
+
+
+model = GPTLanguageModel(d_model, vocab_size, num_block, num_heads, d_ffn, dropout).to(device)
+crieterion = nn.CrossEntropyLoss()
+optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0.01)
+
 
 
 with open("input.txt", "r", encoding="utf-8") as f:
     text = f.read()
-    text = text * 5
+    text = text
 
 
 tokenizer = GPT2TokenizerFast.from_pretrained("gpt2")
@@ -34,100 +43,73 @@ train_data = data[:n]
 val_data = data[n:]
 
 
-def get_batch(split):
-    data_split = train_data if split == "train" else val_data
+class CustomDataset(Dataset):
 
-    if len(data_split) <= block_size:
-        raise ValueError(f"Dataset too small: {len(data_split)} tokens")
+    def __init__(self, tokens, block_size):
+        self.tokens = tokens
+        self.block_size = block_size
 
-    ix = torch.randint(len(data_split) - block_size, (batch_size,))
-    x = torch.stack([data_split[i:i+block_size] for i in ix])
-    y = torch.stack([data_split[i+1:i+block_size+1] for i in ix])
+    def __len__(self, ):
+        return len(self.tokens) - self.block_size
 
-    return x.to(device), y.to(device)
+    def __getitem__(self, idx):
+        x = self.tokens[idx:idx+self.block_size]
+        y = self.tokens[idx+1:idx+self.block_size+1]
+        return x, y
 
 
-@torch.no_grad()
-def estimate_loss(model):
-    out = {}
-    model.eval()
 
-    for split in ["train", "val"]:
-        losses = torch.zeros(eval_iters)
-        for k in range(eval_iters):
-            X, Y = get_batch(split)
-            _, loss = model(X, Y)
-            losses[k] = loss.item()
-        out[split] = losses.mean()
+train_dataset = CustomDataset(train_data, block_size)
+val_dataset = CustomDataset(val_data, block_size)
+train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle = True)
+val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle = False))
 
+
+
+
+
+best_loss = float("inf")
+for Epoch in range(epochs):
     model.train()
-    return out
+    step = 0
+    losss = []
+    for batch_features, batch_labels in tqdm(train_dataloader):
+        step+=1
+        batch_features, batch_labels = batch_features.to(device), batch_labels.to(device)
+        optimizer.zero_grad()
+        y_pred = model(batch_features)  ###(B, T, vocab_size)
+        y_pred = y_pred.reshape(-1, vocab_size)   ###(B*T, vocab_size)
+        batch_labels = batch_labels.reshape(-1)    ####(B*T, )
+        loss_valu = crieterion(y_pred, batch_labels)
+        losss.append(loss_valu.item())   
+        loss_valu.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        optimizer.step()
 
 
-model = GPTLanguageModel(vocab_size).to(device)
+        # print(f"Epoch : {Epoch} | Step : {step} | train_loss : {loss_valu.item()} ")
 
-optimizer = torch.optim.AdamW(
-    model.parameters(),
-    lr=learning_rate,
-    weight_decay=0.01
-)
+    new_arr = np.array(losss)
+    print(f"Epoch : {Epoch} | train_mean_loss : {np.mean(new_arr)} ")
 
+    model.eval()
+    losss = []
+    step = 0
+    with torch.no_grad():
+        for batch_features, batch_labels in tqdm(val_dataloader):
+            step+=1
+            batch_features, batch_labels = batch_features.to(device), batch_labels.to(device)
+            y_pred = model(batch_features)  ###(B, T, vocab_size)
+            y_pred = y_pred.reshape(-1, vocab_size)   ###(B*T, vocab_size)
+            batch_labels = batch_labels.reshape(-1)    ####(B*T, )
+            loss_valu = crieterion(y_pred, batch_labels)
+            losss.append(loss_valu.item())
 
-best_val_loss = float("inf")
-patience = 5
-counter = 0
+            # print(f"Epoch : {epoch} | Step : {step} | val_loss : {loss_valu.item():.4f}")
 
+        avg_val_loss = np.mean(losss)
+        if avg_val_loss < best_loss:
+            best_loss = avg_val_loss
+            torch.save(model.state_dict(), "best_model.pt")
 
-for iter in range(max_iters):
-
-    if iter % eval_interval == 0:
-        losses = estimate_loss(model)
-
-        print(f"step {iter}: train {losses['train']:.4f}, val {losses['val']:.4f}")
-
-       
-        if losses["val"] < best_val_loss:
-            best_val_loss = losses["val"]
-            counter = 0
-            torch.save(model.state_dict(), "best_model.pth")
-        else:
-            counter += 1
-
-        if counter >= patience:
-            print("Early stopping triggered")
-            break
-
-     
-        context = torch.tensor(
-            [encode("KING:\nMy lord, ")],
-            dtype=torch.long,
-            device=device
-        )
-
-        out = model.generate(
-            context,
-            max_new_tokens=100,
-            temperature=0.6,
-            top_k=40,
-            top_p=0.85
-        )
-
-        # print(decode(out[0].tolist()))
-        print("------------------------------------------------")
-
-    xb, yb = get_batch("train")
-
-    _, loss = model(xb, yb)
-
-    optimizer.zero_grad(set_to_none=True)
-    loss.backward()
-
-    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-
-    optimizer.step()
-
-
-torch.save({
-    "model_state_dict": model.state_dict(),
-    "vocab_size": vocab_size
-}, "model.pth")
+        print(f"Epoch : {epoch} | val_mean_loss : {np.mean(losss):.4f}")
