@@ -3,163 +3,111 @@ import torch.nn as nn
 from torch.nn import functional as F
 
 
-n_embd = 256
-n_head = 6
-n_layer = 6
-dropout = 0.3
-block_size = 64
 
-
-
-class Head(nn.Module):
-    """One head of masked self-attention"""
-
-    def __init__(self, head_size):
+class SelfAttention(nn.Module):
+    def __init__(self, d_model, dropout):
         super().__init__()
-        self.key = nn.Linear(n_embd, head_size, bias=False)
-        self.query = nn.Linear(n_embd, head_size, bias=False)
-        self.value = nn.Linear(n_embd, head_size, bias=False)
-
-        self.register_buffer("tril", torch.tril(torch.ones(block_size, block_size)))
+        self.w_q = nn.Linear(d_model, d_model)
+        self.w_k = nn.Linear(d_model, d_model)
+        self.w_v = nn.Linear(d_model, d_model)
+        self.softmax = nn.Softmax(dim=-1)
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
-        B, T, C = x.shape
-
-        k = self.key(x)
-        q = self.query(x)
-
-        wei = q @ k.transpose(-2, -1) * (k.shape[-1] ** -0.5)
-        wei = wei.masked_fill(self.tril[:T, :T] == 0, float("-inf"))
-        wei = F.softmax(wei, dim=-1)
-        wei = self.dropout(wei)
-
-        v = self.value(x)
-        out = wei @ v
+        """ x -> (B, T, C)
+            w_q -> (C, C)
+            w_k -> (C, C)
+            w_v -> (C, C)
+            """
+        query = self.w_q(x)  ### (B, T, C)
+        key = self.w_k(x)  ### (B, T, C)
+        value = self.w_v(x)  ### (B, T, C)
+        out = query @ key.transpose(-2, -1)  ### ### (B, T, C) @ (B, C, T) -> (B, T, T)
+        T = out.shape[-1]
+        mask = torch.tril(torch.ones(T, T, device=out.device))    
+        out = out.masked_fill(mask == 0, float("-inf"))   
+        out = self.softmax(out/math.sqrt(key.size(-1)))
+        out = self.dropout(out)
+        out = out @ value  ## (B, T, T) @ (B, T, C)
         return out
 
 
 class MultiHeadAttention(nn.Module):
-    """Multiple heads in parallel"""
-
-    def __init__(self, num_heads, head_size):
+    def __init__(self, d_model, num_heads, dropout):
         super().__init__()
-        self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)])
-        self.proj = nn.Linear(head_size * num_heads, n_embd)
+        self.w_q = nn.Linear(d_model, d_model)
+        self.w_k = nn.Linear(d_model, d_model)
+        self.w_v = nn.Linear(d_model, d_model)
+        self.num_heads = num_heads
+        if d_model % num_heads != 0:
+            raise ValueError("d_model must be divisible by num_heads")
+        self.head_dim = d_model // num_heads
+        self.softmax = nn.Softmax(dim=-1)
+        self.w_o = nn.Linear(d_model, d_model)
         self.dropout = nn.Dropout(dropout)
-
     def forward(self, x):
-        out = torch.cat([h(x) for h in self.heads], dim=-1)
-        out = self.dropout(self.proj(out))
+        B, T, C = x.shape
+        query = self.w_q(x)  ### (B, T, C)
+        key   = self.w_k(x)  ### (B, T, C)
+        value = self.w_v(x)   ### (B, T, C)
+        query = query.view(B, T, self.num_heads, self.head_dim).transpose(1, 2)  ### (B, H, T, d)
+        key   = key.view(B, T, self.num_heads, self.head_dim).transpose(1, 2)  ### (B, H, T, d)
+        value = value.view(B, T, self.num_heads, self.head_dim).transpose(1, 2)  ###(B, H, T, d)
+        scores = query @ key.transpose(-2, -1)   #####(B, H, T, T)
+        mask = torch.tril(torch.ones(T, T, device=x.device))
+        scores = scores.masked_fill(mask == 0, float("-inf"))
+        attn = self.softmax(scores / math.sqrt(self.head_dim)) ###(B, H, T, T)
+        attn = self.dropout(attn)
+        out = attn @ value   ### (B, H, T, d)
+        out = out.transpose(1, 2).reshape(B, T, self.num_heads * self.head_dim)  # (B, T, C)
+        out = self.w_o(out)
         return out
+    
 
 
-class FeedForward(nn.Module):
-    """MLP"""
-
-    def __init__(self):
+class DecoderBlock(nn.Module):
+    def __init__(self, d_model, num_heads, d_ffn, dropout):
         super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(n_embd, 4 * n_embd),
-            nn.ReLU(),
-            nn.Linear(4 * n_embd, n_embd),
-            nn.Dropout(dropout),
-        )
+        self.attn = MultiHeadAttention(d_model, num_heads, dropout)
+        self.ffn = FeedForwardBlock(d_model, d_ffn, dropout)
+        self.norm1 = LayerNormalization(d_model)
+        self.norm2 = LayerNormalization(d_model)
 
     def forward(self, x):
-        return self.net(x)
+        x = x + self.attn(self.norm1(x))
+        x = x + self.ffn(self.norm2(x))
+        return x
+    
 
-
-class Block(nn.Module):
-    """Transformer block"""
-
-    def __init__(self):
+class TransformerDecoder(nn.Module):
+    def __init__(self, num_block, d_model, num_heads, d_ffn, dropout):
         super().__init__()
-        head_size = n_embd // n_head
-        self.sa = MultiHeadAttention(n_head, head_size)
-        self.ffwd = FeedForward()
-        self.ln1 = nn.LayerNorm(n_embd)
-        self.ln2 = nn.LayerNorm(n_embd)
+        self.list = nn.ModuleList([DecoderBlock(d_model, num_heads, d_ffn, dropout) for _ in range(num_block)])
 
     def forward(self, x):
-        x = x + self.sa(self.ln1(x))
-        x = x + self.ffwd(self.ln2(x))
+        for layer in self.list:
+            x = layer(x)
         return x
 
 
+
+
 class GPTLanguageModel(nn.Module):
-    def __init__(self, vocab_size):
+
+    def __init__(self, d_model, vocab_size, num_block, num_heads, d_ffn, dropout):
         super().__init__()
+        self.input_embedding = InputEmbedding(d_model, vocab_size)
+        self.position_embedding = PositionalEmbedding(d_model, block_size)
+        self.decoder_block = TransformerDecoder(num_block, d_model, num_heads, d_ffn, dropout)
+        self.ln_norm = LayerNormalization(d_model)
+        self.last_lyr = nn.Linear(d_model, vocab_size)
 
-        self.token_embedding_table = nn.Embedding(vocab_size, n_embd)
-        self.position_embedding_table = nn.Embedding(block_size, n_embd)
+   
 
-        self.blocks = nn.Sequential(*[Block() for _ in range(n_layer)])
-        self.ln_f = nn.LayerNorm(n_embd)
-        self.lm_head = nn.Linear(n_embd, vocab_size)
-
-        self.apply(self._init_weights)
-
-    def _init_weights(self, module):
-        if isinstance(module, nn.Linear):
-            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-            if module.bias is not None:
-                torch.nn.init.zeros_(module.bias)
-        elif isinstance(module, nn.Embedding):
-            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-
-    def forward(self, idx, targets=None):
-        B, T = idx.shape
-
-        tok_emb = self.token_embedding_table(idx)
-        pos_emb = self.position_embedding_table(
-            torch.arange(T, device=idx.device)
-        )
-
-        x = tok_emb + pos_emb
-        x = self.blocks(x)
-        x = self.ln_f(x)
-        logits = self.lm_head(x)
-
-        if targets is None:
-            loss = None
-        else:
-            B, T, C = logits.shape
-            logits = logits.view(B * T, C)
-            targets = targets.view(B * T)
-            loss = F.cross_entropy(logits, targets)
-
-        return logits, loss
-
-
-    def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None, top_p=None):
-        for _ in range(max_new_tokens):
-
-            idx_cond = idx[:, -block_size:]
-            logits, _ = self(idx_cond)
-
-            logits = logits[:, -1, :] / temperature
-
-            if top_k is not None:
-                v, _ = torch.topk(logits, top_k)
-                logits[logits < v[:, [-1]]] = -float("Inf")
-
-            if top_p is not None:
-                sorted_logits, sorted_indices = torch.sort(logits, descending=True)
-                cumulative_probs = torch.cumsum(
-                    torch.softmax(sorted_logits, dim=-1), dim=-1
-                )
-
-                sorted_indices_to_remove = cumulative_probs > top_p
-                sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
-                sorted_indices_to_remove[..., 0] = 0
-
-                indices_to_remove = sorted_indices[sorted_indices_to_remove]
-                logits[:, indices_to_remove] = -float("Inf")
-
-            probs = torch.softmax(logits, dim=-1)
-
-            idx_next = torch.multinomial(probs, num_samples=1)
-            idx = torch.cat((idx, idx_next), dim=1)
-
-        return idx
+    def forward(self, idx):
+        out = self.input_embedding(idx)   ##idx shape of (B, T)  ### out shape of (B, T, C)
+        out = self.position_embedding(out)  ### out shape of (B, T, C)
+        out = self.decoder_block(out)   ### out shape of (B, T, C)
+        out = self.ln_norm(out)   ### out shape of (B, T, C)
+        logits = self.last_lyr(out)  ##(B, T, vocab_size)
+        return logits
