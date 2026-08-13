@@ -18,7 +18,7 @@ def generate(model, tokenizer, prompt, max_new_tokens, device):
             if(T >= block_size):
                 idx_cond = idx[:, -block_size:]
             y_pred = model(idx_cond)   ###(1, T, vocab_size)
-            logits = y_pred[:, -1, :]   ###(1, vocab_size)
+            logits = y_pred[:, -1, :]   ###(1, vocab_size)   ### select last token
             probab = torch.softmax(logits, dim = -1)  ###(1, vocab_size)
             output = torch.argmax(probab, dim = -1, keepdim = True)  ###(1,1) return argument with max prop
             idx = torch.cat((idx, output), dim = -1)
