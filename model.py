@@ -92,7 +92,7 @@ class SelfAttention(nn.Module):
 
 class MultiHeadAttention(nn.Module):
     def __init__(self, d_model, num_heads, dropout):
-        super().__init__()
+        super().__init__()   ### C --> d_model
         self.w_q = nn.Linear(d_model, d_model)
         self.w_k = nn.Linear(d_model, d_model)
         self.w_v = nn.Linear(d_model, d_model)
